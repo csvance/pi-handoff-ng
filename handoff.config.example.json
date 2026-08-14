@@ -1,0 +1,4 @@
+{
+  "$comment": "Handoff config. Copy to .pi/handoff.json (project) or ~/.pi/agent/handoff.json (global); project wins over global, and the PI_HANDOFF_DIR env var wins over both. Handoff files live OUTSIDE the project by default (~/.pi/agent/handoffs/).",
+  "dir": "/absolute/path/to/handoffs"
+}
