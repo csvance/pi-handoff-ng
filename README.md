@@ -60,7 +60,7 @@ auto-discovered on the next start (or `/reload`).
 | Write the handoff file only (no new session) | `/handoff write [focus]` |
 | List recent handoff files | `/handoff list [n]` |
 | Open a handoff in the full-screen editor | `/handoff open [n\|path]` |
-| Load a handoff into THIS session | `/handoff read [n\|path]` |
+| Load a handoff into THIS session | `/handoff read <path|n>` |
 | Show the handoff directory and config | `/handoff status` |
 
 ### The flow
@@ -108,15 +108,21 @@ See [`handoff.config.example.json`](./handoff.config.example.json).
   (default 10), newest first.
 - **`/handoff open [n|path]`** — open a handoff in the full-screen editor
   (1-based index from `list`, or an explicit path). Saving writes back.
-- **`/handoff read [n|path]`** — load a handoff into the **current**
-  session. The document is delivered as a follow-up user message with a
-  kickoff instruction ("written by a previous agent session… continue
-  this work in this session"), so the current agent absorbs another
-  agent's handoff and picks the work up in place — no new session.
-  Same target syntax as `open`: newest by default, `n` for the nth
-  newest, or an explicit path. Handy when another agent (or another
-  machine's handoff file) left the work and you want this session to
-  continue it.
+- **`/handoff read [path|n]`** — load a handoff into the **current**
+  session. Focused on handoffs created **outside this extension** (other
+  agents, other systems — a plan markdown, a notes file, a handoff from
+  another tool): pass any markdown path, relative to the project
+  (`/handoff read PLAN.md`), absolute, or `~/...`, and the document is
+  delivered as a follow-up user message with a kickoff instruction
+  ("written by a previous agent session… continue this work in this
+  session"), so the current agent absorbs it and picks the work up in
+  place — no new session.
+
+  Tab-complete the path: `/handoff read <tab>` suggests `*.md` files in
+  the project first, then the files this extension produced in its
+  handoff dir. `read <n>` still reads the nth newest handoff this
+  extension produced; a bare `read` shows a hint instead of loading
+  anything.
 - **`/handoff status`** — the handoff directory and how many files it
   holds.
 

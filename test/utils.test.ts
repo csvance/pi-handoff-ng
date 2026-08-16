@@ -8,8 +8,11 @@ import {
   buildHandoffPrompt,
   buildKickoff,
   buildReadKickoff,
+  collectMarkdownFiles,
+  completeReadTargets,
   expandHome,
   getHandoffDir,
+  listMarkdownFiles,
   loadConfig,
   parseHandoffArgs,
   projectName,
@@ -207,4 +210,134 @@ test("buildReadKickoff: tells the CURRENT session to absorb and continue", () =>
   assert.ok(k.includes("written by a previous agent session"));
   assert.ok(k.includes("reconcile it against the actual project"));
   assert.ok(!k.includes("NO memory"));
+});
+
+test("listMarkdownFiles: *.md only, newest first, missing dir → []", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "handoff-list-"));
+  try {
+    mkdirSync(join(tmp, "sub"));
+    writeFileSync(join(tmp, "a.md"), "a");
+    writeFileSync(join(tmp, "b.md"), "b");
+    writeFileSync(join(tmp, "notes.txt"), "txt");
+    writeFileSync(join(tmp, "sub", "c.md"), "c"); // non-recursive: ignored
+    const files = listMarkdownFiles(tmp);
+    assert.equal(files.length, 2);
+    assert.ok(files.every((p) => p.endsWith(".md")));
+    assert.deepEqual(listMarkdownFiles(join(tmp, "missing")), []);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("collectMarkdownFiles: walks project md files, skips hidden/node_modules, breadth-first", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "handoff-walk-"));
+  try {
+    mkdirSync(join(tmp, "docs"));
+    mkdirSync(join(tmp, "docs", "deep"));
+    mkdirSync(join(tmp, ".hidden"));
+    mkdirSync(join(tmp, "node_modules"));
+    writeFileSync(join(tmp, "PLAN.md"), "plan");
+    writeFileSync(join(tmp, "notes.txt"), "txt");
+    writeFileSync(join(tmp, "docs", "a.md"), "a");
+    writeFileSync(join(tmp, "docs", "deep", "b.md"), "b");
+    writeFileSync(join(tmp, ".hidden", "h.md"), "h");
+    writeFileSync(join(tmp, "node_modules", "x.md"), "x");
+    const found = collectMarkdownFiles(tmp);
+    assert.deepEqual(found, ["PLAN.md", "docs/a.md", "docs/deep/b.md"]);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("collectMarkdownFiles: respects the depth limit", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "handoff-depth-"));
+  try {
+    mkdirSync(join(tmp, "a"));
+    mkdirSync(join(tmp, "a", "b"));
+    writeFileSync(join(tmp, "a", "top.md"), "t");
+    writeFileSync(join(tmp, "a", "b", "deep.md"), "d");
+    assert.deepEqual(collectMarkdownFiles(tmp, 1), ["a/top.md"]);
+    assert.deepEqual(collectMarkdownFiles(tmp, 2), ["a/top.md", "a/b/deep.md"]);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("completeReadTargets: project md files first, then handoff-dir files", () => {
+  const project = mkdtempSync(join(tmpdir(), "handoff-proj-"));
+  const handoffs = mkdtempSync(join(tmpdir(), "handoff-dir-"));
+  try {
+    writeFileSync(join(project, "PLAN.md"), "p");
+    writeFileSync(join(project, "other.md"), "o");
+    writeFileSync(join(handoffs, "proj-2026-08-16_10-00-00.md"), "h");
+    const items = completeReadTargets(project, handoffs, "");
+    const values = items.map((i) => i.value);
+    assert.ok(values.includes("PLAN.md"), `expected PLAN.md in ${values}`);
+    assert.ok(values.includes("other.md"));
+    const handoffValue = values.find((v) => v.includes("proj-2026-08-16_10-00-00.md"));
+    assert.ok(handoffValue, `expected handoff-dir file in ${values}`);
+    assert.ok(handoffValue.startsWith("/"), "handoff-dir file outside the project is absolute");
+    // Project files come before handoff-dir files.
+    assert.ok(values.indexOf("PLAN.md") < values.indexOf(handoffValue));
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+    rmSync(handoffs, { recursive: true, force: true });
+  }
+});
+
+test("completeReadTargets: prefix filters by relative path and handoff basename", () => {
+  const project = mkdtempSync(join(tmpdir(), "handoff-proj-"));
+  const handoffs = mkdtempSync(join(tmpdir(), "handoff-dir-"));
+  try {
+    mkdirSync(join(project, "docs"));
+    writeFileSync(join(project, "PLAN.md"), "p");
+    writeFileSync(join(project, "docs", "guide.md"), "g");
+    writeFileSync(join(handoffs, "proj-2026-08-16_10-00-00.md"), "h");
+    // Relative prefix matches project files.
+    const plan = completeReadTargets(project, handoffs, "PLAN").map((i) => i.value);
+    assert.deepEqual(plan, ["PLAN.md"]);
+    const guide = completeReadTargets(project, handoffs, "docs/").map((i) => i.value);
+    assert.deepEqual(guide, ["docs/guide.md"]);
+    // Handoff-dir files match on basename too.
+    const byBase = completeReadTargets(project, handoffs, "proj-2026").map((i) => i.value);
+    assert.equal(byBase.length, 1);
+    assert.ok(byBase[0].endsWith("proj-2026-08-16_10-00-00.md"));
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+    rmSync(handoffs, { recursive: true, force: true });
+  }
+});
+
+test("completeReadTargets: ~ prefix returns ~-form paths", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "handoff-home-"));
+  const oldHome = process.env.HOME;
+  try {
+    process.env.HOME = tmp;
+    const handoffs = join(tmp, ".pi", "agent", "handoffs");
+    mkdirSync(handoffs, { recursive: true });
+    writeFileSync(join(handoffs, "h.md"), "h");
+    writeFileSync(join(tmp, "PLAN.md"), "p");
+    const items = completeReadTargets(tmp, handoffs, "~");
+    const values = items.map((i) => i.value);
+    assert.ok(values.includes("~/.pi/agent/handoffs/h.md"), `expected ~-form handoff in ${values}`);
+    assert.ok(values.includes("~/PLAN.md"), `expected ~-form project file in ${values}`);
+    // Absolute prefix matches absolute paths.
+    const abs = completeReadTargets(tmp, handoffs, join(tmp, "PLAN")).map((i) => i.value);
+    assert.deepEqual(abs, [join(tmp, "PLAN.md")]);
+  } finally {
+    process.env.HOME = oldHome;
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("completeReadTargets: nothing to suggest → empty", () => {
+  const project = mkdtempSync(join(tmpdir(), "handoff-empty-"));
+  const handoffs = mkdtempSync(join(tmpdir(), "handoff-dir-"));
+  try {
+    assert.deepEqual(completeReadTargets(project, handoffs, ""), []);
+    assert.deepEqual(completeReadTargets(project, handoffs, "zzz"), []);
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+    rmSync(handoffs, { recursive: true, force: true });
+  }
 });

@@ -7,8 +7,8 @@
  * `~/.pi/agent/handoffs/`), so projects don't accumulate markdown files.
  */
 
-import { existsSync, readFileSync } from "node:fs";
-import { basename, isAbsolute, join, resolve } from "node:path";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
 
 export const CONFIG_FILE = "handoff.json";
@@ -144,6 +144,122 @@ export function parseHandoffArgs(raw: string): HandoffArgs {
   }
   if (first === "status") return { action: "status", count: 10, focus: undefined };
   return { action: "handoff", focus: trimmed || undefined, count: 10 };
+}
+
+/* ------------------------------------------------------------------ */
+/* Markdown discovery (for /handoff read completions)                  */
+/* ------------------------------------------------------------------ */
+
+/** A completion item (structurally matches pi's AutocompleteItem). */
+export interface HandoffCompletion {
+  value: string;
+  label: string;
+  description?: string;
+}
+
+/**
+ * List `*.md` files in a directory (non-recursive), as absolute paths,
+ * newest first. Returns [] when the directory does not exist.
+ */
+export function listMarkdownFiles(dir: string): string[] {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((f) => f.endsWith(".md"))
+    .map((f) => join(dir, f))
+    .filter((p) => statSync(p).isFile())
+    .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
+}
+
+/**
+ * Collect `*.md` files under `base` as paths relative to `base`,
+ * breadth-first (root files first), depth-bounded. Skips hidden entries
+ * (dot-dirs like .git, .pi, .scratch) and node_modules. Used to suggest
+ * markdown handoff files for `/handoff read` — handoffs are usually
+ * plan/notes markdown produced outside this extension.
+ */
+export function collectMarkdownFiles(base: string, maxDepth = 5, limit = 100): string[] {
+  const out: string[] = [];
+  const queue: { dir: string; depth: number }[] = [{ dir: base, depth: 0 }];
+  while (queue.length > 0 && out.length < limit) {
+    const { dir, depth } = queue.shift()!;
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue; // unreadable directory — skip
+    }
+    for (const e of entries) {
+      if (e.name.startsWith(".") || e.name === "node_modules") continue;
+      const p = join(dir, e.name);
+      if (e.isDirectory()) {
+        if (depth < maxDepth) queue.push({ dir: p, depth: depth + 1 });
+      } else if (e.isFile() && e.name.endsWith(".md")) {
+        out.push(relative(base, p));
+      }
+    }
+  }
+  return out;
+}
+
+/** `~/...` form of an absolute path, or undefined when outside HOME. */
+function toHomePath(p: string): string | undefined {
+  const home = process.env.HOME;
+  if (!home) return undefined;
+  if (p === home) return "~";
+  if (p.startsWith(home + "/")) return "~" + p.slice(home.length);
+  return undefined;
+}
+
+/**
+ * Completion items for `/handoff read <prefix>`: markdown files in the
+ * project (as relative paths — the typical "handoff produced outside the
+ * system" case), then the extension's own handoff-dir files. The prefix
+ * is matched against relative, `~/`, or absolute forms depending on how
+ * it starts. Returns values ready to insert after `/handoff read `.
+ */
+export function completeReadTargets(cwd: string, dir: string, prefix: string): HandoffCompletion[] {
+  const items: HandoffCompletion[] = [];
+  const seen = new Set<string>();
+  const push = (value: string, description: string): void => {
+    if (seen.has(value)) return;
+    seen.add(value);
+    items.push({ value, label: value, description });
+  };
+
+  const isTilde = prefix.startsWith("~");
+  const isAbs = prefix.startsWith("/");
+  const lower = prefix.toLowerCase();
+
+  // 1) Project markdown files, relative to the project.
+  for (const rel of collectMarkdownFiles(cwd)) {
+    const abs = join(cwd, rel);
+    if (isTilde) {
+      const homeRel = toHomePath(abs);
+      if (homeRel && homeRel.toLowerCase().startsWith(lower)) push(homeRel, "project");
+    } else if (isAbs) {
+      if (abs.toLowerCase().startsWith(lower)) push(abs, "project");
+    } else if (rel.toLowerCase().startsWith(lower)) {
+      push(rel, "project");
+    }
+  }
+
+  // 2) Handoff files this extension produced (readable here too).
+  for (const abs of listMarkdownFiles(dir)) {
+    if (isTilde) {
+      const homeRel = toHomePath(abs);
+      if (homeRel && homeRel.toLowerCase().startsWith(lower)) push(homeRel, "handoff dir");
+    } else if (isAbs) {
+      if (abs.toLowerCase().startsWith(lower)) push(abs, "handoff dir");
+    } else {
+      const rel = relative(cwd, abs);
+      const display = rel.startsWith("..") ? (toHomePath(abs) ?? abs) : rel;
+      if (basename(abs).toLowerCase().startsWith(lower) || display.toLowerCase().startsWith(lower)) {
+        push(display, "handoff dir");
+      }
+    }
+  }
+
+  return items.slice(0, 50);
 }
 
 /* ------------------------------------------------------------------ */

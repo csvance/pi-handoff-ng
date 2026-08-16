@@ -22,14 +22,19 @@
  *   session (review it with `/handoff open` first, start later)
  * - `/handoff list [n]`      — list the n most recent handoff files
  * - `/handoff open [n|path]` — open a handoff in the full-screen editor
- * - `/handoff read [n|path]` — load a handoff into THIS session: the
- *   document is delivered as a follow-up user message with a kickoff
- *   instruction, so the current agent absorbs another agent's handoff and
- *   continues the work in place
+ * - `/handoff read [path|n]` — load a handoff into THIS session. Focused
+ *   on handoffs created OUTSIDE this extension (other agents, other
+ *   systems): pass any markdown path — relative to the project, absolute,
+ *   or `~/...` — and the document is delivered as a follow-up user
+ *   message with a kickoff instruction, so the current agent absorbs it
+ *   and continues the work in place. Tab-complete the path (`/handoff
+ *   read <tab>` suggests project *.md files and handoff-dir files); `read
+ *   <n>` still reads the nth newest handoff this extension produced; a
+ *   bare `read` shows a hint.
  * - `/handoff status`        — show the handoff directory and config
  */
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
@@ -37,8 +42,10 @@ import {
   buildHandoffPrompt,
   buildKickoff,
   buildReadKickoff,
+  completeReadTargets,
   expandHome,
   getHandoffDir,
+  listMarkdownFiles,
   loadConfig,
   parseHandoffArgs,
   projectName,
@@ -49,22 +56,15 @@ const READ_CUSTOM_TYPE = "handoff-read";
 const SUBCOMMANDS = ["write", "list", "open", "read", "status"];
 
 export default function (pi: ExtensionAPI): void {
+  /** Last project cwd seen from a command invocation (for completions). */
+  let lastCwd: string | undefined;
+
   /* ---------------------------------------------------------------- */
   /* Helpers                                                           */
   /* ---------------------------------------------------------------- */
 
-  /** List handoff files newest-first; returns paths (may be empty). */
-  function listHandoffFiles(dir: string): string[] {
-    if (!existsSync(dir)) return [];
-    return readdirSync(dir)
-      .filter((f) => f.endsWith(".md"))
-      .map((f) => join(dir, f))
-      .filter((p) => statSync(p).isFile())
-      .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
-  }
-
   function showList(ctx: ExtensionCommandContext, dir: string, count: number): void {
-    const files = listHandoffFiles(dir).slice(0, count);
+    const files = listMarkdownFiles(dir).slice(0, count);
     if (files.length === 0) {
       ctx.ui.notify(`No handoff files yet — run /handoff to create one.\nDir: ${dir}`, "info");
       return;
@@ -81,13 +81,26 @@ export default function (pi: ExtensionAPI): void {
    * 1-based), or `open <path>` (absolute or `~/` path).
    */
   function resolveOpenTarget(dir: string, target: string | undefined): string | undefined {
-    if (!target) return listHandoffFiles(dir)[0];
+    if (!target) return listMarkdownFiles(dir)[0];
     const n = Number.parseInt(target, 10);
     if (Number.isFinite(n) && n > 0) {
-      return listHandoffFiles(dir)[n - 1];
+      return listMarkdownFiles(dir)[n - 1];
     }
     if (target.startsWith("/") || target.startsWith("~")) return expandHome(target);
     return undefined; // not a number or a path — ambiguous
+  }
+
+  /**
+   * Resolve the file to read: `read <path>` accepts ANY path — absolute,
+   * `~/`, or relative to the project (handoffs created outside this
+   * extension) — and `read <n>` picks the nth newest handoff this
+   * extension produced. Returns undefined only for a missing target.
+   */
+  function resolveReadTarget(dir: string, cwd: string, target: string): string | undefined {
+    const n = Number.parseInt(target, 10);
+    if (Number.isFinite(n) && n > 0) return listMarkdownFiles(dir)[n - 1];
+    if (target.startsWith("/") || target.startsWith("~")) return expandHome(target);
+    return join(cwd, target);
   }
 
   async function openHandoff(ctx: ExtensionCommandContext, dir: string, target: string | undefined): Promise<void> {
@@ -116,18 +129,24 @@ export default function (pi: ExtensionAPI): void {
    * Load a handoff into the CURRENT session: read the file and deliver
    * the document (plus a kickoff instruction) as a follow-up user message
    * with `triggerTurn`, so the current agent absorbs the handoff and
-   * continues the work in place — no new session.
+   * continues the work in place — no new session. Targets are handoffs
+   * created outside this extension: any markdown path (relative, absolute,
+   * or `~/`), or the nth newest handoff this extension produced.
    */
   async function readHandoff(ctx: ExtensionCommandContext, dir: string, target: string | undefined): Promise<void> {
-    const path = resolveOpenTarget(dir, target);
-    if (!path) {
-      const files = listHandoffFiles(dir);
+    if (!target) {
       ctx.ui.notify(
-        files.length === 0
-          ? `No handoff files yet — run /handoff to create one.\nDir: ${dir}`
-          : `No handoff file for "${target ?? ""}" — run /handoff list to see what exists.`,
+        [
+          "Give a path to the handoff file: /handoff read <path> — tab-complete suggests *.md files in the project (handoffs produced outside pi).",
+          `Or a number n for the nth newest handoff this extension produced: ${dir}`,
+        ].join("\n"),
         "info",
       );
+      return;
+    }
+    const path = resolveReadTarget(dir, ctx.cwd, target);
+    if (!path) {
+      ctx.ui.notify(`No handoff file for "${target}" — run /handoff list to see what exists.`, "warning");
       return;
     }
     if (!existsSync(path)) {
@@ -180,16 +199,32 @@ export default function (pi: ExtensionAPI): void {
 
   pi.registerCommand("handoff", {
     description:
-      "Generate a handoff document from the current conversation (focus derived from what's outstanding), then start a new pi session initialized with it. Subcommands: write (file only), list, open (editor), read (load into this session), status.",
-    getArgumentCompletions: (prefix: string) =>
-      SUBCOMMANDS.filter((s) => s.startsWith(prefix)).map((s) => ({ value: s, label: s })),
+      "Generate a handoff document from the current conversation (focus derived from what's outstanding), then start a new pi session initialized with it. Subcommands: write (file only), list, open (editor), read (load a markdown handoff into this session; tab-complete the path), status.",
+    getArgumentCompletions: (prefix: string) => {
+      const text = prefix.trimStart();
+      const spaceIndex = text.search(/\s/);
+      if (spaceIndex === -1) {
+        // Still on the first token: complete subcommand names.
+        return SUBCOMMANDS.filter((s) => s.startsWith(text)).map((s) => ({ value: s, label: s }));
+      }
+      const first = text.slice(0, spaceIndex);
+      const rest = text.slice(spaceIndex + 1).trimStart();
+      if (first.toLowerCase() === "read") {
+        // `read` is for handoffs created outside the system — complete
+        // markdown file paths (project first, then handoff dir).
+        const cwd = lastCwd ?? process.cwd();
+        return completeReadTargets(cwd, getHandoffDir(cwd, loadConfig(cwd)), rest);
+      }
+      return [];
+    },
     handler: async (args, ctx) => {
+      lastCwd = ctx.cwd;
       const { action, focus, count, target } = parseHandoffArgs(args ?? "");
       const config = loadConfig(ctx.cwd);
       const dir = getHandoffDir(ctx.cwd, config);
 
       if (action === "status") {
-        const files = listHandoffFiles(dir);
+        const files = listMarkdownFiles(dir);
         ctx.ui.notify(
           [
             `Handoff dir: ${dir}`,
