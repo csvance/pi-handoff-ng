@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.2.0 (2026-08-16)
+
+- `/handoff read [n|path]` — load a handoff into the CURRENT session:
+  the document is delivered as a follow-up user message with a kickoff
+  instruction, so the current agent absorbs another agent's handoff and
+  continues the work in place (no new session). Same target syntax as
+  `open`: newest, nth newest, or an explicit path.
+
 ## v0.1.0 (2026-08-14)
 
 - `/handoff [focus]` — prompts the current agent to generate a handoff

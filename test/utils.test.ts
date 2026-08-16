@@ -7,6 +7,7 @@ import {
   buildHandoffFileName,
   buildHandoffPrompt,
   buildKickoff,
+  buildReadKickoff,
   expandHome,
   getHandoffDir,
   loadConfig,
@@ -86,6 +87,24 @@ test("parseHandoffArgs: subcommands", () => {
   assert.deepEqual(parseHandoffArgs("open 3"), {
     action: "open",
     target: "3",
+    count: 10,
+    focus: undefined,
+  });
+  assert.deepEqual(parseHandoffArgs("read"), {
+    action: "read",
+    target: undefined,
+    count: 10,
+    focus: undefined,
+  });
+  assert.deepEqual(parseHandoffArgs("read 3"), {
+    action: "read",
+    target: "3",
+    count: 10,
+    focus: undefined,
+  });
+  assert.deepEqual(parseHandoffArgs("read /tmp/x.md"), {
+    action: "read",
+    target: "/tmp/x.md",
     count: 10,
     focus: undefined,
   });
@@ -179,4 +198,13 @@ test("buildKickoff: references the handoff file", () => {
   const k = buildKickoff("/home/user/.pi/agent/handoffs/proj.md");
   assert.ok(k.includes("Handoff file (for reference): /home/user/.pi/agent/handoffs/proj.md"));
   assert.ok(k.includes("read it carefully"));
+});
+
+test("buildReadKickoff: tells the CURRENT session to absorb and continue", () => {
+  const k = buildReadKickoff("/home/user/.pi/agent/handoffs/proj.md");
+  assert.ok(k.includes("Handoff file (for reference): /home/user/.pi/agent/handoffs/proj.md"));
+  assert.ok(k.includes("loaded into THIS session"));
+  assert.ok(k.includes("written by a previous agent session"));
+  assert.ok(k.includes("reconcile it against the actual project"));
+  assert.ok(!k.includes("NO memory"));
 });

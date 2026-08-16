@@ -106,7 +106,7 @@ export function buildHandoffFileName(cwd: string, focus: string | undefined): st
 /* Argument parsing                                                    */
 /* ------------------------------------------------------------------ */
 
-export type HandoffAction = "handoff" | "write" | "list" | "open" | "status";
+export type HandoffAction = "handoff" | "write" | "list" | "open" | "read" | "status";
 
 export interface HandoffArgs {
   action: HandoffAction;
@@ -114,7 +114,7 @@ export interface HandoffArgs {
   focus?: string;
   /** list: how many files to show (default 10). */
   count: number;
-  /** open: 1-based index into newest-first list, or a path. */
+  /** open/read: 1-based index into newest-first list, or a path. */
   target?: string;
 }
 
@@ -125,7 +125,7 @@ function parseIntArg(rest: string, fallback: number): number {
 
 /**
  * Parse `/handoff` arguments. A leading subcommand (`write`, `list`,
- * `open`, `status`) is consumed; anything else is the focus text.
+ * `open`, `read`, `status`) is consumed; anything else is the focus text.
  */
 export function parseHandoffArgs(raw: string): HandoffArgs {
   const trimmed = raw.trim();
@@ -134,9 +134,9 @@ export function parseHandoffArgs(raw: string): HandoffArgs {
   const rest = parts.slice(1).join(" ").trim();
   if (first === "write") return { action: "write", focus: rest || undefined, count: 10 };
   if (first === "list") return { action: "list", count: parseIntArg(rest, 10), focus: undefined };
-  if (first === "open") {
+  if (first === "open" || first === "read") {
     return {
-      action: "open",
+      action: first,
       target: rest || undefined,
       count: 10,
       focus: undefined,
@@ -220,5 +220,24 @@ export function buildKickoff(file: string): string {
     `Handoff file (for reference): ${file}`,
     "",
     "Start by orienting yourself (the handoff's Key context and Next steps sections), then work through the outstanding items in order. If something in the handoff is ambiguous, explore the project to resolve it before asking.",
+  ].join("\n");
+}
+
+/**
+ * The read message tail for `/handoff read` — appended after the handoff
+ * document when it is loaded into the CURRENT session (as opposed to a
+ * fresh continuation session). The current agent already has its own
+ * context; the handoff is an external document to absorb and act on.
+ */
+export function buildReadKickoff(file: string): string {
+  return [
+    "[HANDOFF READ]",
+    "The handoff document above was written by a previous agent session and is being loaded into THIS session.",
+    "",
+    "Read it carefully before doing anything else: it describes what the work is, what has been done, what is still outstanding, and the next steps. The document is the other session's record of the work — treat it as authoritative for the state it describes, and reconcile it against the actual project before making changes.",
+    "",
+    `Handoff file (for reference): ${file}`,
+    "",
+    "Then continue the work in this session: orient yourself (the handoff's Key context and Next steps sections), and work through the outstanding items in order. If something in the handoff is ambiguous, explore the project to resolve it before asking.",
   ].join("\n");
 }

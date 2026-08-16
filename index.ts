@@ -22,6 +22,10 @@
  *   session (review it with `/handoff open` first, start later)
  * - `/handoff list [n]`      — list the n most recent handoff files
  * - `/handoff open [n|path]` — open a handoff in the full-screen editor
+ * - `/handoff read [n|path]` — load a handoff into THIS session: the
+ *   document is delivered as a follow-up user message with a kickoff
+ *   instruction, so the current agent absorbs another agent's handoff and
+ *   continues the work in place
  * - `/handoff status`        — show the handoff directory and config
  */
 
@@ -32,6 +36,7 @@ import {
   buildHandoffFileName,
   buildHandoffPrompt,
   buildKickoff,
+  buildReadKickoff,
   expandHome,
   getHandoffDir,
   loadConfig,
@@ -40,7 +45,8 @@ import {
 } from "./utils.ts";
 
 const GENERATE_CUSTOM_TYPE = "handoff-generate";
-const SUBCOMMANDS = ["write", "list", "open", "status"];
+const READ_CUSTOM_TYPE = "handoff-read";
+const SUBCOMMANDS = ["write", "list", "open", "read", "status"];
 
 export default function (pi: ExtensionAPI): void {
   /* ---------------------------------------------------------------- */
@@ -107,6 +113,45 @@ export default function (pi: ExtensionAPI): void {
   }
 
   /**
+   * Load a handoff into the CURRENT session: read the file and deliver
+   * the document (plus a kickoff instruction) as a follow-up user message
+   * with `triggerTurn`, so the current agent absorbs the handoff and
+   * continues the work in place — no new session.
+   */
+  async function readHandoff(ctx: ExtensionCommandContext, dir: string, target: string | undefined): Promise<void> {
+    const path = resolveOpenTarget(dir, target);
+    if (!path) {
+      const files = listHandoffFiles(dir);
+      ctx.ui.notify(
+        files.length === 0
+          ? `No handoff files yet — run /handoff to create one.\nDir: ${dir}`
+          : `No handoff file for "${target ?? ""}" — run /handoff list to see what exists.`,
+        "info",
+      );
+      return;
+    }
+    if (!existsSync(path)) {
+      ctx.ui.notify(`Not found: ${path}`, "warning");
+      return;
+    }
+    const content = readFileSync(path, "utf8").trim();
+    if (!content) {
+      ctx.ui.notify(`Handoff file is empty: ${path}`, "warning");
+      return;
+    }
+    await ctx.waitForIdle(); // settle anything already in flight
+    ctx.ui.notify(`Loading handoff into this session: ${path}`, "info");
+    pi.sendMessage(
+      {
+        customType: READ_CUSTOM_TYPE,
+        content: [content, buildReadKickoff(path)].join("\n\n---\n\n"),
+        display: true,
+      },
+      { triggerTurn: true, deliverAs: "followUp" },
+    );
+  }
+
+  /**
    * Generate the handoff file: prompt the current agent (follow-up turn)
    * to reflect on the conversation and write the handoff markdown to
    * `file`. Returns true when the file exists afterwards.
@@ -135,7 +180,7 @@ export default function (pi: ExtensionAPI): void {
 
   pi.registerCommand("handoff", {
     description:
-      "Generate a handoff document from the current conversation (focus derived from what's outstanding), then start a new pi session initialized with it. Subcommands: write (file only), list, open, status.",
+      "Generate a handoff document from the current conversation (focus derived from what's outstanding), then start a new pi session initialized with it. Subcommands: write (file only), list, open (editor), read (load into this session), status.",
     getArgumentCompletions: (prefix: string) =>
       SUBCOMMANDS.filter((s) => s.startsWith(prefix)).map((s) => ({ value: s, label: s })),
     handler: async (args, ctx) => {
@@ -166,6 +211,11 @@ export default function (pi: ExtensionAPI): void {
 
       if (action === "open") {
         await openHandoff(ctx, dir, target);
+        return;
+      }
+
+      if (action === "read") {
+        await readHandoff(ctx, dir, target);
         return;
       }
 
