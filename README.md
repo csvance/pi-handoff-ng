@@ -113,10 +113,16 @@ See [`handoff.config.example.json`](./handoff.config.example.json).
   agents, other systems — a plan markdown, a notes file, a handoff from
   another tool): pass any markdown path, relative to the project
   (`/handoff read PLAN.md`), absolute, or `~/...`, and the document is
-  delivered as a follow-up user message with a kickoff instruction
-  ("written by a previous agent session… continue this work in this
-  session"), so the current agent absorbs it and picks the work up in
-  place — no new session.
+  delivered as a follow-up user message with a kickoff instruction, so
+  the current agent absorbs it and picks the work up in place — no new
+  session.
+
+  The injected message wraps the document in `BEGIN/END HANDOFF DOCUMENT
+  (reference only)` markers and frames it as reference material about the
+  work, **not** a set of instructions: handoffs written by other systems
+  sometimes contain their own meta-instructions (e.g. "write a new
+  handoff"), and the kickoff explicitly tells the agent to ignore those
+  and not to write a new handoff or start another session.
 
   Tab-complete the path: `/handoff read <tab>` suggests `*.md` files in
   the project first, then the files this extension produced in its

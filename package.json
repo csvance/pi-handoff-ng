@@ -1,6 +1,6 @@
 {
   "name": "pi-handoff-ng",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Handoff for pi: the current agent writes a handoff document (focus derived from what's outstanding in the conversation), stored outside the project, then a new pi session starts initialized with it — or read a handoff markdown produced outside the system into the current session.",
   "type": "module",
   "license": "MIT",

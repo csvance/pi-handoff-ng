@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.3.1 (2026-08-16)
+
+- Read/kickoff prompts hardened against re-handoff loops: the document
+  loaded by `/handoff read` is wrapped in BEGIN/END markers and framed as
+  reference material about the work, NOT a set of instructions. Handoffs
+  written by other systems sometimes contain their own meta-instructions
+  ("write a new handoff"); the prompt now explicitly tells the agent to
+  ignore text inside the document that instructs it to write a new
+  handoff, hand the work off, or start another session, and not to do
+  so. The same guard was added to the continuation-session kickoff.
+
 ## v0.3.0 (2026-08-16)
 
 - `/handoff read` is focused on handoffs created outside this extension:

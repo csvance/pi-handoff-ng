@@ -163,7 +163,7 @@ export default function (pi: ExtensionAPI): void {
     pi.sendMessage(
       {
         customType: READ_CUSTOM_TYPE,
-        content: [content, buildReadKickoff(path)].join("\n\n---\n\n"),
+        content: buildReadKickoff(path, content),
         display: true,
       },
       { triggerTurn: true, deliverAs: "followUp" },
