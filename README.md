@@ -15,11 +15,29 @@
    session is recorded as its parent, and the new agent is kicked off with
    instructions to read the handoff and continue the work.
 
+**Automatic handoff:** the agent itself can trigger the same flow — its
+primary use is to hand off **mid-task** when context usage is high and
+pi's auto-compaction would otherwise summarize the work (a handoff the
+agent writes preserves far more than compaction will); it also works at
+natural task boundaries. An optional token threshold hands off
+automatically before compaction gets there. Automatic handoffs are
+labeled as such: the handoff document records its trigger and stated
+reason, and the continuation session's kickoff tells the fresh agent the
+handoff was triggered by the agent (or the threshold), **not** by a user
+command.
+
 Verified end-to-end: the generated document captured the conversation
 state, the continuation session opened with the handoff loaded, and the
-fresh agent continued the work described in it.
+fresh agent continued the work described in it. The automatic path was
+verified against a live pi (RPC mode): tool call → settled run →
+`/handoff --auto agent <focus>` dispatched through pi's command path →
+document written → new session with parent tracking and the provenance
+kickoff.
 
 ## Install
+
+Requires **pi ≥ 0.84.2** (the automatic-handoff dispatch uses
+`sendUserMessage`'s `expandPromptTemplates` option, added in 0.84.2).
 
 ### From GitHub (recommended for everyone else)
 
@@ -87,6 +105,84 @@ auto-discovered on the next start (or `/reload`).
 If the generation turn does not produce the file (e.g. the write tool was
 restricted), no session is started and a warning shows the expected path.
 
+### Automatic handoff
+
+The primary motivation: **it is better to hand off mid-task than to let
+pi's built-in auto-compaction run.** Compaction produces a generic
+transcript summary and loses the task-specific detail only the current
+agent holds; a handoff the agent writes *while it is mid-task* captures
+the in-flight task, its decisions, and the exact next step. So the
+extension is built to hand off **before** compaction becomes the only
+option.
+
+Two ways for a handoff to be triggered without the user typing
+`/handoff` (both converge on the exact same flow as above — the automatic
+trigger re-dispatches the `/handoff` command internally, so there is one
+code path, one file format, one kickoff):
+
+- **Agent tool.** The agent gets a `handoff(focus?, reason?)` tool with
+two first-class uses taught in its system prompt:
+  1. *Natural boundary* — a logical task is complete and the next piece
+     of work is a separate effort that does not depend on details that
+     exist only in this conversation's context.
+  2. *Mid-task compaction preemption* — context usage is high enough that
+     auto-compaction is likely to fire before the current task finishes;
+     handing off now is the better choice. **Mid-task is explicitly
+     encouraged, not forbidden** — the only real anti-condition is that
+     the agent must be able to state the next steps concretely (the
+     document has to carry them).
+
+  To make call #2 a real decision, the agent is given the signal it
+  needs: once context usage reaches **60% of the window**, every run's
+  system prompt carries a short `[handoff] Context usage: 72% of the
+  window (144k/200k tokens)…` line telling it how close compaction is and
+  that a mid-task handoff it writes preserves more than compaction will.
+  Below 60% nothing is appended, so the system prompt (and prompt-cache
+  prefixes) stays byte-identical for the normal case.
+
+  Calling the tool stops the current run (`terminate`); when the run has
+  fully settled (no retry, compaction, or queued continuation pending —
+  pi's `agent_settled` event), the extension dispatches the handoff. The
+  optional `reason` (e.g. "context at 80%, mid-refactor — preempting
+  compaction") is recorded in the document and told to the continuation
+  session.
+- **Token threshold** (opt-in). With
+  `"autoHandoff": { "thresholdTokens": 120000 }` in the handoff config,
+  the session is handed off automatically once its estimated context
+  usage crosses that many tokens (checked after each settled run; right
+  after compaction the usage is unknown, so a just-compacted session is
+  skipped). This is the fully-automatic version of the same idea. To make
+  it preempt pi's built-in auto-compaction rather than race it, set the
+  threshold **below** `contextWindow - reserveTokens` (reserveTokens
+  defaults to 16384) — e.g. for a 200k window, compaction fires around
+  183k, so a threshold of ~150–170k hands off first with the agent still
+  fully aware of the task.
+
+**Provenance.** Automatic handoffs are labeled for the receiver:
+
+- the generation prompt records the trigger (and the stated reason, when
+  given), so the handoff document's Focus section says it was triggered
+  automatically — and, for a mid-task handoff, describes the in-flight
+  task and exactly where it stands;
+- the continuation session's kickoff says so explicitly — e.g. *"Provenance:
+  this handoff was triggered automatically by the previous agent … it was
+  NOT a user command. Stated reason: …"* — and invites the fresh agent to
+  flag it if the next steps look premature once checked against the
+  actual project state.
+
+**Guard rails.** A 5-minute cooldown suppresses threshold re-triggering
+right after a dispatch (the generation turn still runs in the old session
+with the same large context); a handoff is never dropped while user
+messages are queued (it retries on the next settled run); agent-initiated
+handoffs below a context floor (default 25%, `minContextPercent`, 0
+disables) are declined in-band so the agent simply keeps working — below
+the floor compaction isn't imminent, so a handoff is churn, not
+preemption; and the whole mechanism only runs in interactive modes (TUI
+or RPC) — in headless modes the tool reports that and the agent continues
+in place. Disable the agent tool with `"autoHandoff": { "tool": false }`.
+
+`/handoff status` shows the effective automatic-handoff settings.
+
 ### Where the files go
 
 Handoff files live in **`~/.pi/agent/handoffs/`** by default — next to
@@ -98,6 +194,9 @@ To change the location, set `"dir"` in `~/.pi/agent/handoff.json`
 (global) or `.pi/handoff.json` (project; wins over global), or set the
 `PI_HANDOFF_DIR` env var (wins over both). A leading `~` is expanded.
 See [`handoff.config.example.json`](./handoff.config.example.json).
+Automatic-handoff settings go in the same config under `"autoHandoff"`
+(see [Automatic handoff](#automatic-handoff)); project and global
+`autoHandoff` keys merge one level deep.
 
 ### Subcommands
 

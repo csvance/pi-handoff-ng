@@ -1,4 +1,10 @@
 {
-  "$comment": "Handoff config. Copy to .pi/handoff.json (project) or ~/.pi/agent/handoff.json (global); project wins over global, and the PI_HANDOFF_DIR env var wins over both. Handoff files live OUTSIDE the project by default (~/.pi/agent/handoffs/).",
-  "dir": "/absolute/path/to/handoffs"
+  "$comment": "Handoff config. Copy to .pi/handoff.json (project) or ~/.pi/agent/handoff.json (global); project wins over global (autoHandoff keys merge one level deep), and the PI_HANDOFF_DIR env var wins over both for the dir. Handoff files live OUTSIDE the project by default (~/.pi/agent/handoffs/).",
+  "dir": "/absolute/path/to/handoffs",
+  "autoHandoff": {
+    "$comment": "Automatic handoff. 'tool' (default true) registers the agent-callable handoff tool the model can invoke — at a natural task boundary, or MID-TASK when context is high and auto-compaction would otherwise summarize the work. 'thresholdTokens' (default 0 = off) hands off automatically once context usage (tokens) crosses the value; to preempt pi's built-in auto-compaction, set it BELOW contextWindow - reserveTokens (reserveTokens defaults to 16384). 'minContextPercent' (default 25) is the floor for agent-initiated handoffs: below it the tool declines in-band so the agent keeps working (0 disables the floor). Automatic handoffs tell the continuation session they were agent/threshold-triggered, not user commands.",
+    "tool": true,
+    "thresholdTokens": 0,
+    "minContextPercent": 25
+  }
 }
