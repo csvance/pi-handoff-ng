@@ -17,59 +17,6 @@ export const DEFAULT_HANDOFF_DIR = "handoffs"; // relative to the pi agent dir
 export interface HandoffConfig {
   /** Directory for handoff files. Default: <agent dir>/handoffs. */
   dir?: string;
-  /** Automatic handoff (agent tool + token threshold). See AutoHandoffConfig. */
-  autoHandoff?: AutoHandoffConfig;
-}
-
-/**
- * Automatic handoff. Lets a handoff be triggered without the user typing
- * `/handoff`:
- * - `tool`: register an agent-callable `handoff` tool the model can invoke
- *   when it judges a handoff is better than letting the conversation grow
- *   to auto-compaction — at a natural task boundary, or MID-TASK when
- *   compaction is likely to fire first.
- * - `thresholdTokens`: when > 0, automatically hand off once the session's
- *   estimated context usage (tokens) crosses this value. To preempt pi's
- *   built-in auto-compaction, set it BELOW `contextWindow - reserveTokens`
- *   (reserveTokens defaults to 16384).
- * - `minContextPercent`: floor for agent-initiated (tool) handoffs; below
- *   it the tool declines in-band so the agent keeps working. 0 disables.
- */
-export interface AutoHandoffConfig {
-  /** Register the agent-callable `handoff` tool. Default: true. */
-  tool?: boolean;
-  /** When > 0, auto-hand off when context usage (tokens) crosses this. Default: 0 (off). */
-  thresholdTokens?: number;
-  /** Minimum context usage (percent) for an agent-initiated handoff. Default: 25; 0 disables the floor. */
-  minContextPercent?: number;
-}
-
-/** Normalized automatic-handoff settings (defaults applied). */
-export interface AutoHandoffSettings {
-  tool: boolean;
-  thresholdTokens: number;
-  minContextPercent: number;
-}
-
-/**
- * Resolve automatic-handoff settings with defaults:
- * tool on by default, threshold off (0) by default, context floor at 25%.
- * Non-positive/non-finite values are treated as their off/sane defaults.
- */
-export function getAutoHandoffSettings(config: HandoffConfig): AutoHandoffSettings {
-  const a = config.autoHandoff;
-  const tool = a?.tool !== false;
-  const raw = a?.thresholdTokens;
-  const thresholdTokens =
-    typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 0;
-  const rawMin = a?.minContextPercent;
-  const minContextPercent =
-    typeof rawMin === "number" && Number.isFinite(rawMin) && rawMin > 0
-      ? Math.min(100, Math.floor(rawMin))
-      : 0 === rawMin
-        ? 0
-        : 25;
-  return { tool, thresholdTokens, minContextPercent };
 }
 
 /* ------------------------------------------------------------------ */
@@ -98,16 +45,7 @@ export function loadConfig(cwd: string): HandoffConfig {
     if (!existsSync(p)) continue;
     try {
       const parsed = JSON.parse(readFileSync(p, "utf8")) as HandoffConfig;
-      // Merge `autoHandoff` one level deep so individual keys can be set
-      // across the global and project configs (a plain Object.assign would
-      // let the project object replace the global object wholesale).
-      const prevAuto = merged.autoHandoff;
       Object.assign(merged, parsed);
-      if (prevAuto || parsed.autoHandoff) {
-        merged.autoHandoff = { ...prevAuto, ...parsed.autoHandoff };
-      } else {
-        delete merged.autoHandoff;
-      }
     } catch (e) {
       console.error(`[handoff] Could not parse ${p}: ${e instanceof Error ? e.message : e}`);
     }
@@ -170,9 +108,6 @@ export function buildHandoffFileName(cwd: string, focus: string | undefined): st
 
 export type HandoffAction = "handoff" | "write" | "list" | "open" | "read" | "status";
 
-/** Where an automatic handoff came from. */
-export type AutoHandoffSource = "agent" | "threshold";
-
 export interface HandoffArgs {
   action: HandoffAction;
   /** Free-text focus ("" for write/handoff means: derive automatically). */
@@ -181,23 +116,6 @@ export interface HandoffArgs {
   count: number;
   /** open/read: 1-based index into newest-first list, or a path. */
   target?: string;
-  /**
-   * Present when the invocation carried the internal `--auto <kind>` marker
-   * (i.e. it was dispatched by the extension's automatic trigger, not typed
-   * by a user). Only ever set for the `handoff` action.
-   */
-  autoSource?: AutoHandoffSource;
-}
-
-/**
- * The command line the extension's automatic trigger dispatches to re-enter
- * the normal `/handoff` flow. The `--auto <kind>` marker is internal: it is
- * parsed back out by `parseHandoffArgs` and never shown to the model or user
- * as focus text. A real user would not type it, so there is no collision.
- */
-export function buildAutoHandoffCommand(source: AutoHandoffSource, focus?: string): string {
-  const f = focus?.trim();
-  return f ? `/handoff --auto ${source} ${f}` : `/handoff --auto ${source}`;
 }
 
 function parseIntArg(rest: string, fallback: number): number {
@@ -206,36 +124,26 @@ function parseIntArg(rest: string, fallback: number): number {
 }
 
 /**
- * Parse `/handoff` arguments. A leading internal `--auto <kind>` marker
- * (agent|threshold) is consumed first and surfaced as `autoSource`. A
- * leading subcommand (`write`, `list`, `open`, `read`, `status`) is consumed;
- * anything else is the focus text.
+ * Parse `/handoff` arguments. A leading subcommand (`write`, `list`,
+ * `open`, `read`, `status`) is consumed; anything else is the focus text.
  */
 export function parseHandoffArgs(raw: string): HandoffArgs {
-  let text = raw.trim();
-  let autoSource: AutoHandoffSource | undefined;
-  const autoMatch = text.match(/^--auto\s+(agent|threshold)\s*([\s\S]*)$/);
-  if (autoMatch) {
-    autoSource = autoMatch[1] as AutoHandoffSource;
-    text = (autoMatch[2] ?? "").trim();
-  }
-
-  const parts = text.split(/\s+/);
+  const trimmed = raw.trim();
+  const parts = trimmed.split(/\s+/);
   const first = parts[0]?.toLowerCase();
   const rest = parts.slice(1).join(" ").trim();
-
-  let args: HandoffArgs;
-  if (first === "write") args = { action: "write", focus: rest || undefined, count: 10 };
-  else if (first === "list") args = { action: "list", count: parseIntArg(rest, 10), focus: undefined };
-  else if (first === "open" || first === "read")
-    args = { action: first, target: rest || undefined, count: 10, focus: undefined };
-  else if (first === "status") args = { action: "status", count: 10, focus: undefined };
-  else args = { action: "handoff", focus: text || undefined, count: 10 };
-
-  // The marker only makes sense on the handoff action; never surface it for
-  // a subcommand (the auto-dispatcher only ever issues the plain flow).
-  if (autoSource && args.action === "handoff") args.autoSource = autoSource;
-  return args;
+  if (first === "write") return { action: "write", focus: rest || undefined, count: 10 };
+  if (first === "list") return { action: "list", count: parseIntArg(rest, 10), focus: undefined };
+  if (first === "open" || first === "read") {
+    return {
+      action: first,
+      target: rest || undefined,
+      count: 10,
+      focus: undefined,
+    };
+  }
+  if (first === "status") return { action: "status", count: 10, focus: undefined };
+  return { action: "handoff", focus: trimmed || undefined, count: 10 };
 }
 
 /* ------------------------------------------------------------------ */
@@ -359,88 +267,25 @@ export function completeReadTargets(cwd: string, dir: string, prefix: string): H
 /* ------------------------------------------------------------------ */
 
 /**
- * Plain-language description of how an automatic handoff was triggered. Used
- * so the receiving (continuation) agent knows the handoff was automated — by
- * the previous agent, or by a token threshold — rather than a user command.
- */
-export function describeAutoSource(source: AutoHandoffSource): string {
-  return source === "agent"
-    ? "automatically by the previous agent, which called its handoff tool proactively (either at a natural task boundary, or mid-task because a handoff is preferable to letting auto-compaction summarize the work)"
-    : "automatically because the previous session's context usage crossed a configured token threshold";
-}
-
-/** Context usage at or above this percent gets the system-prompt warning line. */
-export const CONTEXT_WARN_PERCENT = 60;
-
-/** "144k" form of a token count (for the warning line and tool results). */
-export function formatK(tokens: number): string {
-  return `${Math.max(1, Math.round(tokens / 1000))}k`;
-}
-
-/**
- * The per-run system-prompt line shown once context usage is in the danger
- * zone: it tells the agent how close auto-compaction is, and that a
- * mid-task handoff it writes itself preserves more than compaction will.
- * Returns undefined below the warn threshold (so the system prompt — and
- * prompt-cache prefixes — stay byte-identical for the normal case).
- */
-export function buildContextUsageLine(
-  percent: number | null | undefined,
-  tokens: number | null | undefined,
-  contextWindow: number | undefined,
-): string | undefined {
-  if (typeof percent !== "number" || !Number.isFinite(percent)) return undefined;
-  if (percent < CONTEXT_WARN_PERCENT) return undefined;
-  const usage =
-    typeof tokens === "number" && contextWindow
-      ? `${percent.toFixed(0)}% of the window (${formatK(tokens)}/${formatK(contextWindow)} tokens)`
-      : `${percent.toFixed(0)}% of the window`;
-  return (
-    `[handoff] Context usage: ${usage}. Pi's auto-compaction will summarize this conversation when the window is nearly full. ` +
-    `If you are mid-task and would rather hand off than be compacted, call the handoff tool now — a handoff you write mid-task captures your in-flight task, decisions, and exact next step, which compaction would lose.`
-  );
-}
-
-/**
  * The handoff-generation prompt. Sent to the current agent as a follow-up
  * turn: it reflects on the conversation (what's outstanding / not done /
  * worth taking forward) and writes the handoff file with its write tool.
- * When `autoSource` is set, the prompt records that this handoff was
- * triggered automatically (not by a user command).
  */
 export function buildHandoffPrompt(opts: {
   cwd: string;
   project: string;
   focus: string | undefined;
   file: string;
-  autoSource?: AutoHandoffSource;
-  /** Why the triggering agent handed off (e.g. mid-task, preempting compaction). */
-  reason?: string;
 }): string {
   const focusLine = opts.focus?.trim()
     ? `Focus: ${opts.focus.trim()}`
     : "Focus: (none given — derive it from this conversation: what was left outstanding, what is not yet done, and what select information is worth taking forward)";
-  // Conditional lines are `undefined` when absent (NOT `""`), so the filter
-  // below drops them without touching the intentional blank-line separators.
-  const triggerLine = opts.autoSource
-    ? `Trigger: this handoff was triggered ${describeAutoSource(opts.autoSource)} — it was not a user command.`
-    : undefined;
-  const reasonLine = opts.autoSource && opts.reason?.trim()
-    ? `Reason given by the triggering agent: ${opts.reason.trim()}`
-    : undefined;
-  const autoGuideline = opts.autoSource
-    ? opts.reason?.trim()
-      ? "- State in the Focus section that this handoff was triggered automatically (not by a user command) and WHY (the reason given above) — for a mid-task handoff, describe the in-flight task and exactly where it stands."
-      : "- State in the Focus section that this handoff was triggered automatically (not by a user command) — for a mid-task handoff, describe the in-flight task and exactly where it stands."
-    : undefined;
   return [
     "[HANDOFF GENERATION]",
     "You are handing this session over to a brand-new pi session that has NO memory of this conversation. Write a handoff document that lets the continuation session keep this work moving.",
     "",
     `Project: ${opts.project} (working directory: ${opts.cwd})`,
     focusLine,
-    triggerLine,
-    reasonLine,
     `Handoff file: ${opts.file}`,
     "",
     "Base the handoff on everything in this session's conversation so far.",
@@ -470,35 +315,21 @@ export function buildHandoffPrompt(opts: {
     "- Be concrete: exact file paths, commands, terms, and numbers.",
     "- Be selective: take forward what matters, leave settled detail behind. A handoff is a map, not a transcript.",
     "- Keep it tight — aim for a page or less unless the work genuinely needs more.",
-    autoGuideline,
     `- Use your write tool with exactly this path: ${opts.file} (the directory already exists).`,
     "- If you cannot write to this path (e.g. restricted tools), reply with ONE line explaining why — do not improvise a different location.",
     "- When done, reply with ONE line: the path and a one-sentence summary of what the handoff covers. Do not paste the document into your reply.",
-  ]
-    .filter((line): line is string => line !== undefined)
-    .join("\n");
+  ].join("\n");
 }
 
 /**
  * The kickoff message for the continuation session. The full handoff
  * content is embedded in the session's first user message (via
  * `newSession` setup); this message tells the fresh agent what to do with
- * it. When `autoSource` is set, the message also makes clear that this
- * handoff was triggered automatically (agent or threshold), not by a user
- * command.
+ * it.
  */
-export function buildKickoff(file: string, autoSource?: AutoHandoffSource, reason?: string): string {
-  const provenance = autoSource
-    ? [
-        "",
-        `Provenance: this handoff was triggered ${describeAutoSource(autoSource)} — it was NOT a user command.${
-          reason?.trim() ? ` Stated reason: ${reason.trim()}` : ""
-        } The previous agent (or the token threshold) decided to hand off at this point, and that judgement may be imperfect. Once you have checked the actual state of the project, if the Next steps below look premature or off-target, say so before acting.`,
-      ]
-    : [];
+export function buildKickoff(file: string): string {
   return [
     "You are continuing work handed off from a previous pi session.",
-    ...provenance,
     "",
     "The handoff document is included in the message above — read it carefully before doing anything else. It describes the state of the work: what has been done, what is still outstanding, and the next steps.",
     "",

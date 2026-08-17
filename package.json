@@ -1,16 +1,10 @@
 {
   "name": "pi-handoff-ng",
-  "version": "0.4.0",
-  "description": "Handoff for pi: the current agent writes a handoff document (focus derived from what's outstanding in the conversation), stored outside the project, then a new pi session starts initialized with it — or read a handoff markdown produced outside the system into the current session. The agent can also trigger the handoff itself (handoff tool) or on a token threshold, with the continuation session told the handoff was automatic.",
+  "version": "0.3.1",
+  "description": "Handoff for pi: the current agent writes a handoff document (focus derived from what's outstanding in the conversation), stored outside the project, then a new pi session starts initialized with it — or read a handoff markdown produced outside the system into the current session.",
   "type": "module",
   "license": "MIT",
-  "keywords": [
-    "pi-package",
-    "pi",
-    "handoff",
-    "extension",
-    "session"
-  ],
+  "keywords": ["pi-package", "pi", "handoff", "extension", "session"],
   "files": [
     "index.ts",
     "utils.ts",
@@ -27,17 +21,14 @@
     "test": "node --test test/*.test.ts"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": ">=0.84.2"
+    "@earendil-works/pi-coding-agent": "*"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^0.84.1",
     "@types/node": "^22.0.0",
-    "typebox": "^1.3.7",
     "typescript": "^5.5.0"
   },
   "pi": {
-    "extensions": [
-      "./index.ts"
-    ]
+    "extensions": ["./index.ts"]
   }
 }
