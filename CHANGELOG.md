@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.4.1 (2026-08-17)
+
+- **Reverts v0.4.0** — the automatic-handoff feature (agent-callable
+  `handoff` tool, context-usage system-prompt line, `autoHandoff` token
+  threshold) is removed. Decision: after a closer look at pi's built-in
+  auto-compaction it is adequate as-is, so the extension no longer tries
+  to preempt it. Behavior is back to exactly v0.3.1: user-initiated
+  `/handoff` [focus], `write`, `list`, `open`, `read`, `status`, and the
+  hardened read/kickoff prompts.
+
 ## v0.3.1 (2026-08-16)
 
 - Read/kickoff prompts hardened against re-handoff loops: the document
